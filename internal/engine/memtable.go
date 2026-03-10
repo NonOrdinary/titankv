@@ -2,7 +2,7 @@
 FILE Details
 - Memtable ds{
 		ReadWrite Mutex
-		Map[string] -> slice of array
+		Map[string] -> record{ slice of byte, boolean delete}
 	}
 - Methods associated to this Memtable data structure as this lang doesn't have classes
 -- Put(key, value) : Does put the key and value inside the map, allows single writer
