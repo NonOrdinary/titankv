@@ -12,9 +12,7 @@ FILE Details
 
 package engine
 
-import (
-	"sync"
-)
+import "sync"
 
 // Record represents a single entry in our database, value and at tombstone flag
 type Record struct {
@@ -25,17 +23,15 @@ type Record struct {
 
 // Our memtable storage
 type MemTable struct {
-	mu sync.RWMutex
-
-	data map[string]Record // standard map[string] -> record
+	mu   sync.RWMutex
+	data *SkipList // skiplist, superfast probablistic sorted linked list
 }
 
 // NewMemTable is the constructor, is a function but since no classes, thus it works
 func NewMemTable() *MemTable {
-	// I initialized map in Go before using it, becuase Go sets NIL value, which on write would crash(null pointer derefernce)
-	// make allocates Heap Memory for the data structure
+	// skiplist initialised for the memtable structure which we return
 	return &MemTable{
-		data: make(map[string]Record),
+		data: NewSkipList(),
 	}
 }
 
@@ -49,7 +45,7 @@ func (m *MemTable) Put(key string, value []byte) {
 	defer m.mu.Unlock() // very important and cool trick to have -- Absolute Genius
 
 	// Insert the record and ensure the tombstone is false
-	m.data[key] = Record{Value: value, Deleted: false}
+	m.data.Insert(key, Record{Value: value, Deleted: false})
 }
 
 // Get retrieves a record by its key.
@@ -61,11 +57,14 @@ func (m *MemTable) Get(key string) (Record, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	/* Map returns value, T\F depending if key is present in map or not*/
-	record, exists := m.data[key]
-	// We return the whole Record. The caller will have to check record.Deleted
-	// to know if they hit a tombstone.
-	return record, exists
+	// /* Map returns value, T\F depending if key is present in map or not*/
+	// record, exists := m.data[key]
+	// // We return the whole Record. The caller will have to check record.Deleted
+	// // to know if they hit a tombstone.
+	// return record, exists
+
+	// improved using the skiplist,which i read about from LevelDB
+	return m.data.Search(key)
 }
 
 func (m *MemTable) Delete(key string) {
@@ -73,5 +72,7 @@ func (m *MemTable) Delete(key string) {
 	defer m.mu.Unlock()
 
 	// TOMBSTONE: We overwrite the existing key with a nil value and Deleted: true
-	m.data[key] = Record{Value: nil, Deleted: true}
+	// map implementation : m.data[key] = Record{Value: nil, Deleted: true}
+
+	m.data.Insert(key, Record{Value: nil, Deleted: true})
 }
