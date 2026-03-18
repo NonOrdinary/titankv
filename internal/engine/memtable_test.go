@@ -51,13 +51,13 @@ func TestMemTable_Concurrency(t *testing.T) {
 	// We use a WaitGroup to tell the test to wait for all goroutines to finish
 	// before exiting. Otherwise, the test finishes before the threads do!
 
-	// Fire up 100 concurrent writers
-
-	// the function here defined is fastGoroutine type function which would typically look like
+	// the function here defined is fastGoroutine type function which would typically look like,these function
+	// start without even having to call their name,remove "go" from prefix of the func, and it becomes an
+	// auto starting lambda function
 	/**
 			go func(msg string) {
 	        fmt.Println(msg)
-	    	}("going : it is the argument to the goroutine")
+	    	}("going : it is the argument to the goroutine") // this is what actually starts the lambda function
 	*/
 	for i := 0; i < 100; i++ {
 		wg.Add(1)

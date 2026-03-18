@@ -1,3 +1,9 @@
+/**
+ * THEORY or Basic idea about this data structure
+ * 1.Probabilistic data structure, can perform a negative test in logN time
+ * 2.Key will remain sorted, as it is the requirement of our Memtable
+ * 3.Height of each node is actually found by coin toss, and it is ultimately a sorted liinked list
+ * */
 package engine
 
 import (
@@ -9,7 +15,7 @@ import (
 // we can search 2^32 elements in 32 jumps, super fast
 const maxLevel = 32
 
-// Node represents a single element in our Skip List.
+// structure of our NODE
 type Node struct {
 	key    string
 	record Record // Record, our basic unit of stored value in the memtable
@@ -19,30 +25,28 @@ type Node struct {
 	forward []*Node
 }
 
-// SkipList is the actual data structure that will replace our Go map.
 type SkipList struct {
 	// head is a dummy node. It doesn't store data, it just holds the
-	// starting pointers for all our express lanes at all the levels
+	// starting pointers for all the express lanes at all the levels
 	head *Node
 
 	// level is the current highest express lane in use.
 	level int
 }
 
-// newNode is a helper to create a node with correctly sized forward pointers.
+// constructor of node
 func newNode(key string, record Record, level int) *Node {
 	return &Node{
 		key:    key,
 		record: record,
-		// We make the slice size level+1 because arrays are 0-indexed
+		// We make the slice size level+1 because arrays are 0-indexed,obvious
 		forward: make([]*Node, level+1),
 	}
 }
 
 // NewSkipList initializes an empty Skip List.
 func NewSkipList() *SkipList {
-	// Seed the random number generator. We need this later to
-	// "flip a coin" when deciding if a new node gets an express lane.
+	// random generator for coin toss ,initialisation.
 	rand.Seed(time.Now().UnixNano())
 
 	return &SkipList{
@@ -53,11 +57,10 @@ func NewSkipList() *SkipList {
 	}
 }
 
-// randomLevel flips a coin to determine the node's height.
+// rossing the coin to determine the height of node.
 func randomLevel() int {
 	level := 0
 	// rand.Float32() < 0.5 is our 50/50 coin flip.
-	// We cap the height at maxLevel - 1 to prevent out-of-bounds errors.
 	for rand.Float32() < 0.5 && level < maxLevel-1 {
 		level++
 	}
@@ -77,11 +80,8 @@ func (s *SkipList) Search(key string) (Record, bool) {
 		// When the next key is >= our target, we drop down one level and repeat.
 	}
 
-	// We are now at Level 0, right before where our key should be.
-	// Step forward one last time.
 	current = current.forward[0]
-
-	// If the key matches, we found it!
+	// we should be at the node,if not then it's not available
 	if current != nil && current.key == key {
 		return current.record, true
 	}
@@ -91,34 +91,34 @@ func (s *SkipList) Search(key string) (Record, bool) {
 
 // Insert adds a new key or updates an existing one in O(log n) time.
 func (s *SkipList) Insert(key string, record Record) {
-	// The 'update' array holds the "breadcrumbs".
+	// The 'update' array holds just the previous pointers to where out node would be inserted
 	// It remembers the exact nodes where we dropped down a level during our search.
-	// We need these breadcrumbs to know exactly where to splice in our new node.
 	update := make([]*Node, maxLevel)
 	current := s.head
 
-	// Step 1: Find the insertion point, leaving breadcrumbs along the way.
 	for i := s.level; i >= 0; i-- {
 		for current.forward[i] != nil && current.forward[i].key < key {
 			current = current.forward[i]
 		}
-		update[i] = current
+		update[i] = current // save when going down, it's the time we see this level for last time
 	}
 
-	// Step to the exact spot at Level 0.
+	// exact place of insertion ,if it doesn't already exist
 	current = current.forward[0]
 
-	// Step 2: If the key already exists, just update the record (or Tombstone) and return.
+	//If the key already exists, just the record (or Tombstone) and return.
 	if current != nil && current.key == key {
 		current.record = record
 		return
 	}
 
-	// Step 3: It's a brand new key. Flip the coin to see how many express lanes it gets.
+	// get the levels, by coin tosses and map mark the update[i] = current[i]
 	lvl := randomLevel()
 
 	// If the coin flip gave us a taller node than currently exists in the list,
-	// we need to update the skip list's max level and our breadcrumbs.
+	// we need to update the skip list's max level and make the header point to
+	// our new node at this height level,this ensures that this height is reachable when
+	// we are starting the search
 	if lvl > s.level {
 		for i := s.level + 1; i <= lvl; i++ {
 			update[i] = s.head
@@ -126,10 +126,9 @@ func (s *SkipList) Insert(key string, record Record) {
 		s.level = lvl
 	}
 
-	// Step 4: Create the new node.
 	newNode := newNode(key, record, lvl)
 
-	// Step 5: Splice the node into the linked lists using our breadcrumbs.
+	// Set up new node pointers and make sure the prev node points to this node
 	for i := 0; i <= lvl; i++ {
 		newNode.forward[i] = update[i].forward[i]
 		update[i].forward[i] = newNode
