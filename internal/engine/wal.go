@@ -8,12 +8,17 @@
  * -On failure, complete file isn't read, rather only upto last checkpoint, as on reaching checkpoint, the file is synced to
  * disk, basically on failure, start from the previos checkpoint
  * -Checksum : To ensure correct writing of data and no data loss (either by error or by power outage during write)using the checksum
+ * sync pool : very essential, otherwise the Go garbage collector would bottleneck while clearing the space allocated to
+ * serialised data of key,so sync pool are auto released and actually overwritten once given back to pool buffer.
  */
 package engine
 
 import (
+	"bufio"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
+	"io"
 	"os"
 	"sync"
 )
@@ -30,6 +35,7 @@ type WAL struct {
 }
 
 // NewWAL opens an existing WAL file or creates a new one.
+// Gemini Helped on this one a lot
 func NewWAL(path string) (*WAL, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0644)
 	if err != nil {
@@ -55,7 +61,7 @@ func (w *WAL) WriteRecord(key string, value []byte, isTombstone bool) error {
 	// Total: 4 (CRC32 Checksum) + Payload
 	totalSize := 4 + payloadSize
 
-	// 2. Grab a reusable buffer from the pool
+	// 2. Grab a pointer of reusable buffer from the pool : slice of bytes
 	bufPtr := w.pool.Get().(*[]byte)
 	buf := *bufPtr
 
@@ -96,7 +102,7 @@ func (w *WAL) WriteRecord(key string, value []byte, isTombstone bool) error {
 	// Place the checksum, on it's reserved space ofcourse
 	binary.LittleEndian.PutUint32(buf[0:4], checksum)
 
-	// Lock the file and write sequentially
+	// Lock the file and write sequentially(append the data)
 	w.mu.Lock()
 	_, err := w.file.Write(buf)
 	w.mu.Unlock() // Unlock immediately after disk I/O
@@ -113,4 +119,112 @@ func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.file.Close()
+}
+
+// Recover reads the WAL from disk and reconstructs the MemTable efficiently.
+func (w *WAL) Recover(mt *MemTable) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	//moving the pointer to 0th byte, to read the WAL
+	if _, err := w.file.Seek(0, 0); err != nil {
+		return err
+	}
+	// Intially we used 6 syscalls , which consumes a lot of CPU cycles
+	// also, we were dooming the garbage collector, this time we:
+	// FIX 1: bufio.Reader. This grabs 32KB of data from the hard drive
+	// in a single syscall and stores it in RAM. All our io.ReadFull calls
+	// will now read from the Main Memory.
+	reader := bufio.NewReaderSize(w.file, 32*1024)
+
+	// FIX 2: Pre-allocate static buffers OUTSIDE the loop.
+	// We reuse these exact same memory addresses for every single record.
+	headerBuf := make([]byte, 4)
+	tombstoneBuf := make([]byte, 1)
+	lenBuf := make([]byte, 4)
+
+	// scratchBuf is a dynamic buffer we will resize if a key/value is larger than 4KB
+	scratchBuf := make([]byte, 4096)
+
+	for {
+		// Read Checksum - since headerBuf size is 4 byte, thus it will only pull 4 bytes from the space of 32KB
+		if _, err := io.ReadFull(reader, headerBuf); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		expectedChecksum := binary.LittleEndian.Uint32(headerBuf)
+
+		// Read Tombstone
+		if _, err := io.ReadFull(reader, tombstoneBuf); err != nil {
+			return err
+		}
+		isTombstone := tombstoneBuf[0] == 1
+
+		// Read Key Length
+		if _, err := io.ReadFull(reader, lenBuf); err != nil {
+			return err
+		}
+		keyLen := binary.LittleEndian.Uint32(lenBuf) // Converting bytes stored to integer for lengths, as they are required
+
+		// Read Key (Safely growing scratchBuf if the key is massive)
+		if cap(scratchBuf) < int(keyLen) {
+			scratchBuf = make([]byte, keyLen)
+		}
+		keyBytes := scratchBuf[:keyLen]
+		if _, err := io.ReadFull(reader, keyBytes); err != nil {
+			return err
+		}
+		// We convert it to a string now so it copies the underlying bytes.
+		// If we didn't, reading the value into scratchBuf would overwrite our key!
+		keyStr := string(keyBytes)
+
+		// Read Value Length
+		if _, err := io.ReadFull(reader, lenBuf); err != nil {
+			return err
+		}
+		valLen := binary.LittleEndian.Uint32(lenBuf) // this is nothing more then reading bytes and converting to int from MM
+
+		// Read Value
+		if cap(scratchBuf) < int(valLen) {
+			scratchBuf = make([]byte, valLen)
+		}
+		valBytes := scratchBuf[:valLen]
+		if _, err := io.ReadFull(reader, valBytes); err != nil {
+			return err
+		}
+
+		// We MUST allocate a new byte slice for the value here.
+		// The MemTable will hold onto this reference forever. If we just gave it
+		// valBytes, the next loop iteration would overwrite the data in the database!
+		finalVal := make([]byte, valLen)
+		copy(finalVal, valBytes)
+
+		// Verify Checksum (Zero-Allocation Streaming Hashing)
+		hasher := crc32.NewIEEE()
+		hasher.Write(tombstoneBuf)
+
+		binary.LittleEndian.PutUint32(lenBuf, keyLen) // reverse, int -> slice of bytes (storing in MM now,which is 0/1)
+		hasher.Write(lenBuf)
+		hasher.Write([]byte(keyStr))
+
+		binary.LittleEndian.PutUint32(lenBuf, valLen)
+		hasher.Write(lenBuf)
+		hasher.Write(finalVal)
+
+		if hasher.Sum32() != expectedChecksum {
+			return errors.New("WAL corruption detected: torn write : Corrupted during intial write to Log File")
+		}
+
+		// Insert into MemTable
+		if isTombstone {
+			mt.Delete(keyStr)
+		} else {
+			mt.Put(keyStr, finalVal)
+		}
+	}
+
+	// Move the actual OS file pointer back to the end so future Puts append correctly
+	_, err := w.file.Seek(0, 2)
+	return err
 }
