@@ -1,16 +1,18 @@
-/**
- * WAL : Write Ahead Log File
- * -Ensures Durability(D) of ACID
- * -Can withstand any kind of failure, system or server
- * -Success of a transaction to user will only be shown when the wal has been flushed to DISK(permanent) -fsync() syscall
- * -This is an append only file, thus enabling almost sequential writes (we cannot actually ensure that it would be sequential)
- * -There is a file descriptor at end, new data is added to offsets, which are visible immediately(this is what sequential means here)
- * -On failure, complete file isn't read, rather only upto last checkpoint, as on reaching checkpoint, the file is synced to
- * disk, basically on failure, start from the previos checkpoint
- * -Checksum : To ensure correct writing of data and no data loss (either by error or by power outage during write)using the checksum
- * sync pool : very essential, otherwise the Go garbage collector would bottleneck while clearing the space allocated to
- * serialised data of key,so sync pool are auto released and actually overwritten once given back to pool buffer.
- */
+/*
+*
+* WAL : Write Ahead Log File
+Please Note : write now we are directly touching the disk, we would optimise it later
+* -Ensures Durability(D) of ACID
+* -Can withstand any kind of failure, system or server
+* -Success of a transaction to user will only be shown when the wal has been flushed to DISK(permanent) -fsync() syscall
+* -This is an append only file, thus enabling almost sequential writes (we cannot actually ensure that it would be sequential)
+* -There is a file descriptor at end, new data is added to offsets, which are visible immediately(this is what sequential means here)
+* -On failure, complete file isn't read, rather only upto last checkpoint, as on reaching checkpoint, the file is synced to
+* disk, basically on failure, start from the previos checkpoint
+* -Checksum : To ensure correct writing of data and no data loss (either by error or by power outage during write)using the checksum
+* sync pool : very essential, otherwise the Go garbage collector would bottleneck while clearing the space allocated to
+* serialised data of key,so sync pool are auto released and actually overwritten once given back to pool buffer.
+*/
 package engine
 
 import (
@@ -85,7 +87,9 @@ func (w *WAL) WriteRecord(key string, value []byte, isTombstone bool) error {
 	}
 	offset++
 
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(key)))
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(key))) // converting int(key) to LittleEndian byte format because CPU refuse to accept int ,it accepts bits,bytes,slice of bytes
+	// Why only LittleEndian : We can practically do big Endian too, but it's industry standard as i read in blogs, so
+	// that's why, otherwise it's totally upto programmers choice, also littleEndian is faster as LSB is in the lowest address
 	offset += 4
 
 	copy(buf[offset:], key)
