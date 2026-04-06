@@ -134,3 +134,27 @@ func (s *SkipList) Insert(key string, record Record) {
 		update[i].forward[i] = newNode
 	}
 }
+
+// This function is essential for flushing our memtable to SS tables,we return slice of struct {key, record}
+func (s *SkipList) GetAll() []struct {
+	Key    string
+	Record Record
+} {
+	var result []struct {
+		Key    string
+		Record Record
+	}
+	// Start at Level 0 (the standard linked list)
+	current := s.head.forward[0]
+	for current != nil {
+		result = append(result, struct {
+			Key    string
+			Record Record
+		}{
+			Key:    current.key,
+			Record: current.record,
+		})
+		current = current.forward[0]
+	}
+	return result
+}
