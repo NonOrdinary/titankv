@@ -9,10 +9,13 @@ import (
 
 type SSTableReader struct {
 	file             *os.File
+	Path             string
 	index            []IndexEntry
 	indexStartOffset uint32
 	bloomStartOffset uint32
 	bloom            *BloomFilter
+	MinKey           string
+	MaxKey           string
 }
 
 func NewSSTableReader(path string) (*SSTableReader, error) {
@@ -33,7 +36,7 @@ func NewSSTableReader(path string) (*SSTableReader, error) {
 
 	bloomStartOffset := binary.LittleEndian.Uint32(footerBuf[0:4])
 	indexStartOffset := binary.LittleEndian.Uint32(footerBuf[4:8])
-	//*** metaStartOffset := binary.LittleEndian.Uint32(footerBuf[8:12]) // Used for recovery/manifest building later
+	metaStartOffset := binary.LittleEndian.Uint32(footerBuf[8:12]) // Used for recovery/manifest db.go
 	magicNumber := binary.LittleEndian.Uint32(footerBuf[12:16])
 
 	if magicNumber != 0xABCD1234 {
@@ -94,13 +97,33 @@ func NewSSTableReader(path string) (*SSTableReader, error) {
 			Offset: offset,
 		}
 	}
+	// Min Max Keys get
+	//metaSize := int(footerBuf[12] /* cheating slightly, calculate real offset difference */) // Actually, let's just seek and read it properly.
+	_, err = f.Seek(int64(metaStartOffset), io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+
+	lenBuf := make([]byte, 4)
+	io.ReadFull(f, lenBuf)
+	minLen := binary.LittleEndian.Uint32(lenBuf)
+	minBuf := make([]byte, minLen)
+	io.ReadFull(f, minBuf)
+
+	io.ReadFull(f, lenBuf)
+	maxLen := binary.LittleEndian.Uint32(lenBuf)
+	maxBuf := make([]byte, maxLen)
+	io.ReadFull(f, maxBuf)
 	// Obviously, gotta return the address of this sparse index
 	return &SSTableReader{
 		file:             f,
 		index:            index,
+		Path:             path,
 		indexStartOffset: indexStartOffset,
 		bloomStartOffset: bloomStartOffset,
 		bloom:            LoadBloomFilter(bloomBytes, 3),
+		MinKey:           string(minBuf), // Set Min Key
+		MaxKey:           string(maxBuf), // Set Max Key
 	}, nil
 }
 

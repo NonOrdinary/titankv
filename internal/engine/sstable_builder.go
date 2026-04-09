@@ -100,7 +100,7 @@ func (b *SSTableBuilder) Add(key string, value []byte, isTombstone bool) error {
 
 // Writes the Sparse Index to the file
 func (b *SSTableBuilder) Finish() error {
-	// Record exactly where the Data Blocks end and the Index begins
+	// Record exactly where the Data Blocks end and the Bloom filter begins
 	bloomStartOffset := b.offset
 	if _, err := b.file.Write(b.bloom.Bytes()); err != nil {
 		return err

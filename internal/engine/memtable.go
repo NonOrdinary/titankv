@@ -76,3 +76,10 @@ func (m *MemTable) Delete(key string) {
 
 	m.data.Insert(key, Record{Value: nil, Deleted: true})
 }
+
+// Iterate safely locks the MemTable and streams the data.
+func (m *MemTable) Iterate(cb func(key string, record Record)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.data.Iterate(cb)
+}
