@@ -1,85 +1,98 @@
-/*
-FILE Details
-- Memtable ds{
-		ReadWrite Mutex
-		Map[string] -> record{ slice of byte, boolean delete}
-	}
-- Methods associated to this Memtable data structure as this lang doesn't have classes
--- Put(key, value) : Does put the key and value inside the map, allows single writer
--- Get(key) : Returns the value or NIL, depending upon if key was present in map or not, allows multiple readers
--- Delete(key) : Delete's key by placing a tombstone in the record
-*/
-
 package engine
 
 import "sync"
 
-// Record represents a single entry in our database, value and at tombstone flag
-type Record struct {
-	Value []byte
-	// Deleted acts as our Tombstone. If true, the key is considered dead.
-	Deleted bool
-}
+// skipListNodeOverhead accounts for the structural memory cost of a SkipList node.
+// Assuming maxLevel = 16, a slice of 16 pointers (8 bytes each) + struct overhead ≈ 130 bytes.
+const skipListNodeOverhead = 130
 
-// Our memtable storage
+// MemTable is our thread-safe, in-memory storage engine.
 type MemTable struct {
-	mu   sync.RWMutex
-	data *SkipList // skiplist, superfast probablistic sorted linked list
+	mu        sync.RWMutex
+	data      *SkipList
+	sizeBytes int // Tracks physical data + structural memory usage
 }
 
-// NewMemTable is the constructor, is a function but since no classes, thus it works
+// NewMemTable initializes a new MVCC-ready MemTable.
 func NewMemTable() *MemTable {
-	// skiplist initialised for the memtable structure which we return
 	return &MemTable{
-		data: NewSkipList(),
+		data:      NewSkipList(),
+		sizeBytes: 0,
 	}
 }
 
-// Put inserts or updates a key-value pair.
-func (m *MemTable) Put(key string, value []byte) {
-	// lock for write, no goroutine must enter during write
-	m.mu.Lock()
-
-	// defer guarantees that Unlock() will be called right before
-	// the function exits, even if the code panics.
-	defer m.mu.Unlock() // very important and cool trick to have -- Absolute Genius
-
-	// Insert the record and ensure the tombstone is false
-	m.data.Insert(key, Record{Value: value, Deleted: false})
-}
-
-// Get retrieves a record by its key.
-func (m *MemTable) Get(key string) (Record, bool) {
-	// Acquire a Read lock. Other goroutines can also acquire read locks
-	// at the same time, making our database very fast for read-heavy workloads.
-
-	// This function expects to return slice of byte , if key exist and NIL otherwise
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// /* Map returns value, T\F depending if key is present in map or not*/
-	// record, exists := m.data[key]
-	// // We return the whole Record. The caller will have to check record.Deleted
-	// // to know if they hit a tombstone.
-	// return record, exists
-
-	// improved using the skiplist,which i read about from LevelDB
-	return m.data.Search(key)
-}
-
-func (m *MemTable) Delete(key string) {
+// Put inserts a new version of a key into the MemTable.
+// Note: It requires the Orchestrator (db.go) to pass the SeqNum.
+func (m *MemTable) Put(userKey []byte, value []byte, seqNum uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// TOMBSTONE: We overwrite the existing key with a nil value and Deleted: true
-	// map implementation : m.data[key] = Record{Value: nil, Deleted: true}
+	// 1. Pack the metadata into our fixed-length suffix byte slice
+	internalKey := EncodeInternalKey(userKey, seqNum, TypePut)
 
-	m.data.Insert(key, Record{Value: nil, Deleted: true})
+	// 2. Insert into the Skip List
+	m.data.Insert(internalKey, value)
+
+	// 3. Track the physical size of the bytes + node pointer overhead
+	m.sizeBytes += len(internalKey) + len(value) + skipListNodeOverhead
 }
 
-// Iterate safely locks the MemTable and streams the data.
-func (m *MemTable) Iterate(cb func(key string, record Record)) {
+// Get retrieves the most recent version of a key that is <= the requested SeqNum.
+// It returns (value, isDeleted, exists).
+func (m *MemTable) Get(userKey []byte, targetSeqNum uint64) ([]byte, bool, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Create a "dummy" search key.
+	// CRITICAL: We use TypePut (1) because when searching an LSM tree,
+	// the dummy key must use the MAXIMUM possible byte value for the type.
+	// This ensures the comparator sorts it BEFORE any identical timestamp
+	// that might have a TypeDelete (0) flag.
+	searchKey := EncodeInternalKey(userKey, targetSeqNum, TypePut)
+
+	// Search the Skip List. It guarantees it will return the FIRST node
+	// whose SeqNum is <= our targetSeqNum.
+	val, keyType, found := m.data.Search(searchKey)
+
+	if !found {
+		return nil, false, false
+	}
+
+	// If we found the key, but its type is a Tombstone, we tell the caller
+	// that at this specific point in time (targetSeqNum), the key was deleted.
+	if keyType == TypeDelete {
+		return nil, true, true
+	}
+
+	return val, false, true
+}
+
+// Delete acts exactly like a Put, but appends a Tombstone marker instead of a value.
+func (m *MemTable) Delete(userKey []byte, seqNum uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	internalKey := EncodeInternalKey(userKey, seqNum, TypeDelete)
+
+	// Value is nil because it's a delete marker
+	m.data.Insert(internalKey, nil)
+
+	// Track size including structural overhead
+	m.sizeBytes += len(internalKey) + skipListNodeOverhead
+}
+
+// Iterate safely locks the MemTable and streams the InternalKeys to the disk.
+// Used exclusively by the sstable_builder during a 4MB flush.
+func (m *MemTable) Iterate(cb func(internalKey []byte, value []byte)) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	m.data.Iterate(cb)
+}
+
+// ApproximateSize returns the current byte size of the MemTable.
+// The DB orchestrator calls this to check if we have hit the flush limit.
+func (m *MemTable) ApproximateSize() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sizeBytes
 }
