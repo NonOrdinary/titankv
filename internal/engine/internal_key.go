@@ -1,3 +1,8 @@
+/**
+ * internal_key.go : Responsible for comparison, encoding and parsing of the Key
+ * as we aim to hit consitency over format of key throughout.
+ * There is no other use, just this simple usage, basically here for modularity
+ */
 package engine
 
 import (
@@ -5,13 +10,13 @@ import (
 	"encoding/binary"
 )
 
-// Define our operation types
+// We can only have Delete or Put operation, not modify
 const (
 	TypeDelete byte = 0
 	TypePut    byte = 1
 )
 
-const internalKeySuffixLen = 9 // 8 bytes for SeqNum + 1 byte for Type
+const internalKeySuffixLen = 9 // 8 bytes for SeqNum(Time Stamp) + 1 byte for Type of Operation
 
 // EncodeInternalKey packs a user key, a sequence number, and an operation type into a single byte slice.
 // Format: [UserKey (Variable)] + [SeqNum (8 Bytes)] + [Type (1 Byte)]
@@ -19,13 +24,10 @@ func EncodeInternalKey(userKey []byte, seqNum uint64, keyType byte) []byte {
 	size := len(userKey) + internalKeySuffixLen
 	buf := make([]byte, size)
 
-	// 1. Copy the UserKey into the start of the buffer
 	copy(buf, userKey)
 
-	// 2. Encode the 64-bit SeqNum in BigEndian format right after the UserKey
-	binary.BigEndian.PutUint64(buf[len(userKey):], seqNum)
+	binary.BigEndian.PutUint64(buf[len(userKey):], seqNum) // Why Big Endian ? For easy lexicographical sorting
 
-	// 3. Append the 1-byte operation type at the very end
 	buf[size-1] = keyType
 
 	return buf
@@ -38,7 +40,7 @@ func ParseInternalKey(internalKey []byte) (userKey []byte, seqNum uint64, keyTyp
 		return nil, 0, 0 // Invalid key
 	}
 
-	suffixStart := len(internalKey) - internalKeySuffixLen
+	suffixStart := len(internalKey) - internalKeySuffixLen // This is the length of the Key, because suffixLen is already 9
 
 	userKey = internalKey[:suffixStart]
 	seqNum = binary.BigEndian.Uint64(internalKey[suffixStart : suffixStart+8])
@@ -48,22 +50,21 @@ func ParseInternalKey(internalKey []byte) (userKey []byte, seqNum uint64, keyTyp
 }
 
 // CompareInternalKeys is the heart of our MVCC sorting.
-// Rule 1: Sort by UserKey Ascending (A-Z)
-// Rule 2: If UserKeys match, sort by SeqNum DESCENDING (Newest first)
+// 1: Sort by UserKey Ascending (A-Z)
+// 2: If UserKeys match, sort by SeqNum DESCENDING (Newest first) - This is used when evicting keys,out of range
 func CompareInternalKeys(a, b []byte) int {
 	lenA := len(a)
 	lenB := len(b)
 
-	// Safety check for malformed data
 	if lenA < internalKeySuffixLen || lenB < internalKeySuffixLen {
+		// none of the length can be less than internakKeySuffixLen, if it is, then it was partial written
 		return 0
 	}
 
 	userKeyLenA := lenA - internalKeySuffixLen
 	userKeyLenB := lenB - internalKeySuffixLen
 
-	// FAST PATH: Compare UserKeys directly.
-	// We do NOT parse the SeqNum unless the UserKeys are identical.
+	// Yeah, comparing the keys only
 	cmp := bytes.Compare(a[:userKeyLenA], b[:userKeyLenB])
 	if cmp != 0 {
 		return cmp
