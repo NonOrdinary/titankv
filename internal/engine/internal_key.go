@@ -1,8 +1,15 @@
-/**
- * internal_key.go : Responsible for comparison, encoding and parsing of the Key
- * as we aim to hit consitency over format of key throughout.
- * There is no other use, just this simple usage, basically here for modularity
- */
+/*
+*
+  - internal_key.go : Responsible for comparison, encoding and parsing of the Key
+  - as we aim to hit consitency over format of key throughout.
+  - There is no other use, just this simple usage, basically here for modularity
+  - Zero allocation technique : Instead of allocating new slice each time, slice headers are passed, thus it's near
+    to zero allocation
+    Please note , seqNum is never a slice header rather an allocation as in compiled languages, data type values are always
+    put on stack unless explicitally done, it does use our storage, but it won't bother our garbage collector,
+    so 1000 values put on stack are completely wiped out as soon as function exist and there is no manual
+    need of freeing up the memory
+*/
 package engine
 
 import (
@@ -41,8 +48,8 @@ func ParseInternalKey(internalKey []byte) (userKey []byte, seqNum uint64, keyTyp
 	}
 
 	suffixStart := len(internalKey) - internalKeySuffixLen // This is the length of the Key, because suffixLen is already 9
-
-	userKey = internalKey[:suffixStart]
+	// sliceHeader has [Pointer to data,Length of data , Capacity of the slice]
+	userKey = internalKey[:suffixStart] // This shit doesn't allocate new slice, rather userKey now has a slice header
 	seqNum = binary.BigEndian.Uint64(internalKey[suffixStart : suffixStart+8])
 	keyType = internalKey[len(internalKey)-1]
 
@@ -64,7 +71,8 @@ func CompareInternalKeys(a, b []byte) int {
 	userKeyLenA := lenA - internalKeySuffixLen
 	userKeyLenB := lenB - internalKeySuffixLen
 
-	// Yeah, comparing the keys only
+	// Yeah, comparing the keys only, bytes.Compare actually read the data and then compare, not just slice headers are compared
+	// rather data is compared
 	cmp := bytes.Compare(a[:userKeyLenA], b[:userKeyLenB])
 	if cmp != 0 {
 		return cmp
