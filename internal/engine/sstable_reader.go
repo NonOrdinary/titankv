@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -24,97 +26,87 @@ func NewSSTableReader(path string) (*SSTableReader, error) {
 		return nil, err
 	}
 
-	_, err = f.Seek(-16, io.SeekEnd)
-	if err != nil {
+	// 1. Read Footer
+	if _, err := f.Seek(-16, io.SeekEnd); err != nil {
 		return nil, err
 	}
-
 	footerBuf := make([]byte, 16)
 	if _, err := io.ReadFull(f, footerBuf); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read footer: %w", err)
 	}
 
 	bloomStartOffset := binary.LittleEndian.Uint32(footerBuf[0:4])
 	indexStartOffset := binary.LittleEndian.Uint32(footerBuf[4:8])
-	metaStartOffset := binary.LittleEndian.Uint32(footerBuf[8:12]) // Used for recovery/manifest db.go
+	metaStartOffset := binary.LittleEndian.Uint32(footerBuf[8:12])
 	magicNumber := binary.LittleEndian.Uint32(footerBuf[12:16])
 
 	if magicNumber != 0xABCD1234 {
 		f.Close()
-		return nil, os.ErrInvalid
+		return nil, fmt.Errorf("invalid magic number: %x", magicNumber)
 	}
-	// Bloom filter loading to RAM, we want faster writes, so we need to take it to RAM
+
+	// 2. Load Bloom Filter
 	bloomSize := indexStartOffset - bloomStartOffset
 	bloomBytes := make([]byte, bloomSize)
-	_, err = f.Seek(int64(bloomStartOffset), io.SeekStart)
-	if err != nil {
+	if _, err := f.Seek(int64(bloomStartOffset), io.SeekStart); err != nil {
 		return nil, err
 	}
 	if _, err := io.ReadFull(f, bloomBytes); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read bloom filter: %w", err)
 	}
 
-	// Loading the sparse index table to RAM
-	_, err = f.Seek(int64(indexStartOffset), io.SeekStart)
-	if err != nil {
+	// 3. Load Sparse Index
+	if _, err := f.Seek(int64(indexStartOffset), io.SeekStart); err != nil {
 		return nil, err
 	}
-
-	// Get the number of entries inside the Sparse Index, we use countBuf as max number of entries possible
 	countBuf := make([]byte, 4)
-	// Check if there is some bad sector error in the Entries
 	if _, err := io.ReadFull(f, countBuf); err != nil {
 		return nil, err
 	}
-	// Count of entries, obviously convert little endian to int
 	numEntries := binary.LittleEndian.Uint32(countBuf)
 
-	// Create an array(obviously inside RAM) of IndexEntry, put all entries of sparse index to it
 	index := make([]IndexEntry, numEntries)
-
-	for i := 0; i < int(numEntries); i++ {
-		// These error checks are necessary, there can be several errors like modified file by some superuser
-		// midway, or file deleted etc ~ Protection Agreement Basically
-		// read the KeyLength and store in countBuf as bits in little endian format
+	for i := 0; i < int(numEntries); i++ { // FIX 1: Corrected increment
 		if _, err := io.ReadFull(f, countBuf); err != nil {
 			return nil, err
 		}
-
-		keyLen := binary.LittleEndian.Uint32(countBuf) // convert the LittleEndian format to int again
-
-		keyBuf := make([]byte, keyLen) // read the content, basically Key
-		if _, err := io.ReadFull(f, keyBuf); err != nil {
+		keyLen := binary.LittleEndian.Uint32(countBuf)
+		keyBuf := make([]byte, keyLen)
+		if _, err := io.ReadFull(f, keyBuf); err != nil { // FIX 4: Error check
 			return nil, err
 		}
-		// read the offset
 		if _, err := io.ReadFull(f, countBuf); err != nil {
 			return nil, err
 		}
 		offset := binary.LittleEndian.Uint32(countBuf)
 
-		index[i] = IndexEntry{
-			Key:    string(keyBuf),
-			Offset: offset,
-		}
+		index[i] = IndexEntry{Key: keyBuf, Offset: offset}
 	}
-	// Min Max Keys get
-	//metaSize := int(footerBuf[12] /* cheating slightly, calculate real offset difference */) // Actually, let's just seek and read it properly.
-	_, err = f.Seek(int64(metaStartOffset), io.SeekStart)
-	if err != nil {
+
+	// 4. Load Metadata
+	if _, err := f.Seek(int64(metaStartOffset), io.SeekStart); err != nil {
+		return nil, err
+	}
+	lenBuf := make([]byte, 4)
+
+	if _, err := io.ReadFull(f, lenBuf); err != nil {
+		return nil, err
+	}
+	minLen := binary.LittleEndian.Uint32(lenBuf)
+	minBuf := make([]byte, minLen)
+	if _, err := io.ReadFull(f, minBuf); err != nil {
 		return nil, err
 	}
 
-	lenBuf := make([]byte, 4)
-	io.ReadFull(f, lenBuf)
-	minLen := binary.LittleEndian.Uint32(lenBuf)
-	minBuf := make([]byte, minLen)
-	io.ReadFull(f, minBuf)
-
-	io.ReadFull(f, lenBuf)
+	if _, err := io.ReadFull(f, lenBuf); err != nil {
+		return nil, err
+	}
 	maxLen := binary.LittleEndian.Uint32(lenBuf)
 	maxBuf := make([]byte, maxLen)
-	io.ReadFull(f, maxBuf)
-	// Obviously, gotta return the address of this sparse index
+	if _, err := io.ReadFull(f, maxBuf); err != nil {
+		return nil, err
+	}
+
 	return &SSTableReader{
 		file:             f,
 		index:            index,
@@ -122,101 +114,77 @@ func NewSSTableReader(path string) (*SSTableReader, error) {
 		indexStartOffset: indexStartOffset,
 		bloomStartOffset: bloomStartOffset,
 		bloom:            LoadBloomFilter(bloomBytes, 3),
-		MinKey:           string(minBuf), // Set Min Key
-		MaxKey:           string(maxBuf), // Set Max Key
+		MinKey:           string(minBuf),
+		MaxKey:           string(maxBuf),
 	}, nil
 }
 
-func (r *SSTableReader) Get(key string) ([]byte, bool, error) {
-	// Checking the bloom filter
-	if !r.bloom.MightContain(key) {
-		return nil, false, nil
+func (r *SSTableReader) Get(userKey []byte, targetSeqNum uint64) ([]byte, bool, bool, error) {
+	if !r.bloom.MightContain(string(userKey)) {
+		return nil, false, false, nil
 	}
 
 	if len(r.index) == 0 {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
-	// inbuilt binary search, also it's not sorting, the sparse index is already sorted on keys
-	// It returns the
+
+	// 2. Binary Search
 	idx := sort.Search(len(r.index), func(i int) bool {
-		return r.index[i].Key >= key
+		return bytes.Compare(r.index[i].Key, userKey) >= 0
 	})
 
-	if idx < len(r.index) && r.index[idx].Key == key {
-		// Exact match on the block's first key
-	} else if idx > 0 {
-		// one less, 5 >= 3 where (key = 4), so idx points to 5, 4 is inside block of 3, but not visible inside
-		// our sparse index table
+	// FIX 2: Correct index navigation logic
+	if idx > 0 && (idx == len(r.index) || bytes.Compare(r.index[idx].Key, userKey) > 0) {
 		idx--
-	} else {
-		return nil, false, nil
 	}
+	// If idx is 0, we check the first block. If idx > 0, we check the block starting at idx.
 
-	// Calculating the bounds of the block which we have to scan
-	// it will be between current position offset and next index offset currOffset[.....]NextOffset
 	blockStart := r.index[idx].Offset
 	var blockEnd uint32
 	if idx+1 < len(r.index) {
 		blockEnd = r.index[idx+1].Offset
 	} else {
-		blockEnd = r.bloomStartOffset // the data block at the end ,ends at beginning of the bloom filter location on DISK
-
+		blockEnd = r.bloomStartOffset
 	}
 
-	_, err := r.file.Seek(int64(blockStart), io.SeekStart)
-	if err != nil {
-		return nil, false, err
-	}
-
-	bytesToRead := int(blockEnd - blockStart) // these many bytes to read from the DISK
-
+	bytesToRead := int(blockEnd - blockStart)
 	blockBuf := make([]byte, bytesToRead)
-	// Why single system call : Initially i tried to make 6 system calls to read data again, then repeat
-	// the same thing again and again to reach each section (tombstone, keylen, key ,valuelen, value)
-	// so instead , we can bring the whole block to RAM at once and touch disk only once
-	//	This also solves the Garabage collector thrashing, as we will deallocate only once and not again and again
-
-	// 1 SINGLE SYSTEM CALL: Pull the whole chunk into RAM at once.
-	if _, err := io.ReadFull(r.file, blockBuf); err != nil {
-		return nil, false, err
+	if _, err := r.file.ReadAt(blockBuf, int64(blockStart)); err != nil {
+		return nil, false, false, err
 	}
 
-	// In-memory parsing (Zero syscalls in this loop)
+	// 3. Scanning with FIX 3: Correct Offset Advancement
 	currentOffset := 0
 	for currentOffset < bytesToRead {
-		isTombstone := blockBuf[currentOffset] == 1
-		currentOffset++
-
-		keyLen := binary.LittleEndian.Uint32(blockBuf[currentOffset : currentOffset+4])
+		intKeyLen := int(binary.LittleEndian.Uint32(blockBuf[currentOffset : currentOffset+4]))
 		currentOffset += 4
 
-		currentKey := string(blockBuf[currentOffset : currentOffset+int(keyLen)])
-		currentOffset += int(keyLen)
+		internalKey := blockBuf[currentOffset : currentOffset+intKeyLen]
+		currentOffset += intKeyLen
 
-		valLen := binary.LittleEndian.Uint32(blockBuf[currentOffset : currentOffset+4])
+		valLen := int(binary.LittleEndian.Uint32(blockBuf[currentOffset : currentOffset+4]))
 		currentOffset += 4
 
-		// Did we find it?
-		if currentKey == key {
-			if isTombstone {
-				return nil, true, nil
+		// Capture the value slice before potentially skipping or returning
+		valBytes := blockBuf[currentOffset : currentOffset+valLen]
+
+		currUserKey, currSeqNum, currType := ParseInternalKey(internalKey)
+		cmp := bytes.Compare(currUserKey, userKey)
+
+		if cmp == 0 && currSeqNum <= targetSeqNum {
+			if currType == TypeDelete {
+				return nil, true, true, nil
 			}
-
-			// MEMORY LEAK PREVENTION:(Suggested by Gemini, i was so naive)
-			// We MUST copy the value into a new slice. If we just returned a slice
-			// of blockBuf (e.g., blockBuf[start:end]), Go's Garbage Collector would
-			// keep the entire 4KB block in memory forever just to preserve this tiny value!
-			finalVal := make([]byte, valLen)
-			copy(finalVal, blockBuf[currentOffset:currentOffset+int(valLen)])
-			return finalVal, true, nil
+			return append([]byte(nil), valBytes...), false, true, nil
 		}
 
-		currentOffset += int(valLen)
+		// ALWAYS advance the offset by valLen to keep the loop synchronized
+		currentOffset += valLen
 
-		if currentKey > key {
+		if cmp > 0 {
 			break
 		}
 	}
 
-	return nil, false, nil
+	return nil, false, false, nil
 }

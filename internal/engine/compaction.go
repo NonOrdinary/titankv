@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"container/heap"
 	"fmt"
 	"os"
@@ -9,21 +10,16 @@ import (
 )
 
 type HeapItem struct {
-	Key         string
+	InternalKey []byte
 	Value       []byte
-	IsTombstone bool
-	IterIdx     int // Tracks which file this came from (higher = newer)
+	IterIdx     int
 }
 
 type KVHeap []*HeapItem
 
 func (h KVHeap) Len() int { return len(h) }
 func (h KVHeap) Less(i, j int) bool {
-	if h[i].Key == h[j].Key {
-		// If keys are identical, sort by IterIdx DESCENDING (Newer file wins)
-		return h[i].IterIdx > h[j].IterIdx
-	}
-	return h[i].Key < h[j].Key
+	return CompareInternalKeys(h[i].InternalKey, h[j].InternalKey) < 0
 }
 func (h KVHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
 func (h *KVHeap) Push(x interface{}) { *h = append(*h, x.(*HeapItem)) }
@@ -35,7 +31,6 @@ func (h *KVHeap) Pop() interface{} {
 	return item
 }
 
-// Compact merges the oldest 4 SSTables into 1.
 func (db *DB) Compact() error {
 	defer func() {
 		db.mu.Lock()
@@ -43,8 +38,14 @@ func (db *DB) Compact() error {
 		db.mu.Unlock()
 	}()
 
+	// Define 24-hour history watermark
+	watermark := uint64(time.Now().Add(-24 * time.Hour).UnixNano())
+
 	db.mu.RLock()
-	// Snapshot the oldest 4 tables. Leave them in db.sstables to serve live traffic.
+	if len(db.sstables) < 4 {
+		db.mu.RUnlock()
+		return nil
+	}
 	tablesToMerge := make([]*SSTableReader, 4)
 	copy(tablesToMerge, db.sstables[:4])
 	db.mu.RUnlock()
@@ -53,7 +54,6 @@ func (db *DB) Compact() error {
 	pq := &KVHeap{}
 	heap.Init(pq)
 
-	// Open iterators and push the first item from each into the Heap
 	for i, table := range tablesToMerge {
 		iter, err := NewSSTableIterator(table.Path, table.bloomStartOffset)
 		if err != nil {
@@ -62,14 +62,8 @@ func (db *DB) Compact() error {
 		defer iter.Close()
 		iterators = append(iterators, iter)
 
-		kv, err := iter.Next()
-		if err == nil {
-			heap.Push(pq, &HeapItem{
-				Key:         kv.Key,
-				Value:       kv.Value,
-				IsTombstone: kv.IsTombstone,
-				IterIdx:     i,
-			})
+		if kv, err := iter.Next(); err == nil {
+			heap.Push(pq, &HeapItem{InternalKey: kv.InternalKey, Value: kv.Value, IterIdx: i})
 		}
 	}
 
@@ -80,58 +74,57 @@ func (db *DB) Compact() error {
 	}
 
 	for pq.Len() > 0 {
-		// The top item is the smallest key, AND the newest version of it
 		top := heap.Pop(pq).(*HeapItem)
-		currentKey := top.Key
+		userKey, seqNum, keyType := ParseInternalKey(top.InternalKey)
 
-		// L0 Merge: MUST write tombstones to the new L0 file to prevent zombie data
-		builder.Add(top.Key, top.Value, top.IsTombstone)
-
-		// Advance the winning iterator
-		nextKV, err := iterators[top.IterIdx].Next()
-		if err == nil {
-			heap.Push(pq, &HeapItem{Key: nextKV.Key, Value: nextKV.Value, IsTombstone: nextKV.IsTombstone, IterIdx: top.IterIdx})
+		keepVersion := true
+		// Tombstone Resurrection: If baseline is a DELETE, drop it to reclaim space.
+		if seqNum <= watermark && keyType == TypeDelete {
+			keepVersion = false
 		}
 
-		// Discard any older versions of this EXACT SAME key still in the heap
-		for pq.Len() > 0 && (*pq)[0].Key == currentKey {
-			older := heap.Pop(pq).(*HeapItem)
-			nextOlder, err := iterators[older.IterIdx].Next()
-			if err == nil {
-				heap.Push(pq, &HeapItem{Key: nextOlder.Key, Value: nextOlder.Value, IsTombstone: nextOlder.IsTombstone, IterIdx: older.IterIdx})
+		if keepVersion {
+			builder.Add(top.InternalKey, top.Value)
+		}
+
+		// Non-Greedy Advance: Discard "Orphans" from the winning iterator immediately
+		for {
+			nextKV, err := iterators[top.IterIdx].Next()
+			if err != nil {
+				break
 			}
+
+			nUserKey, _, _ := ParseInternalKey(nextKV.InternalKey)
+			if !bytes.Equal(nUserKey, userKey) {
+				heap.Push(pq, &HeapItem{InternalKey: nextKV.InternalKey, Value: nextKV.Value, IterIdx: top.IterIdx})
+				break
+			}
+
+			// If we already hit the watermark for this key, discard all older versions in this file
+			if seqNum <= watermark {
+				continue
+			}
+
+			heap.Push(pq, &HeapItem{InternalKey: nextKV.InternalKey, Value: nextKV.Value, IterIdx: top.IterIdx})
+			break
 		}
 	}
 
 	builder.Finish()
 	newReader, _ := NewSSTableReader(newSSTPath)
 
-	// FIX 1: The Atomic Swap and Manifest Sync
-	// Hold the lock for the ENTIRE state transition to prevent data loss from concurrent flushes
+	// Atomic Swap and Manifest Sync
 	db.mu.Lock()
 	db.sstables = append([]*SSTableReader{newReader}, db.sstables[4:]...)
-
 	db.manifest.Append(ManifestRecord{Action: "ADD", Path: newSSTPath, MinKey: newReader.MinKey, MaxKey: newReader.MaxKey})
 	for _, oldTable := range tablesToMerge {
 		db.manifest.Append(ManifestRecord{Action: "REMOVE", Path: oldTable.Path})
 	}
+	db.mu.Unlock()
 
-	var activeRecords []ManifestRecord
-	for _, sst := range db.sstables {
-		activeRecords = append(activeRecords, ManifestRecord{Path: sst.Path, MinKey: sst.MinKey, MaxKey: sst.MaxKey})
-	}
-
-	// Compact manifest WHILE holding the global lock
-	db.manifest.Compact(activeRecords)
-	db.mu.Unlock() // Safe to release now
-
-	// FIX 2: The "Rug Pull" Protection (Delayed GC)
-	// Spawn a background janitor to clean up the physical files
+	// Rug Pull Protection (Delayed GC)
 	go func(tables []*SSTableReader) {
-		// 10 seconds is more than enough time for any in-flight Get()
-		// request holding an old pointer to finish reading.
 		time.Sleep(10 * time.Second)
-
 		for _, oldTable := range tables {
 			oldTable.file.Close()
 			os.Remove(oldTable.Path)

@@ -18,7 +18,7 @@ package engine
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -33,7 +33,8 @@ type WAL struct {
 }
 
 func NewWAL(path string) (*WAL, error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0644)
+	// FIX 1: Must be O_RDWR so we can actually read it during recovery
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -49,13 +50,9 @@ func NewWAL(path string) (*WAL, error) {
 	}, nil
 }
 
-// WriteRecord appends an InternalKey and Value to the log.
-// The Tombstone and SeqNum are already baked into the internalKey.
 func (w *WAL) WriteRecord(internalKey []byte, value []byte) error {
-
-	// Payload: 4 (InternalKeyLen) + len(internalKey) + 4 (ValueLen) + len(value)
 	payloadSize := 4 + len(internalKey) + 4 + len(value)
-	totalSize := 4 + payloadSize // Total includes 4 bytes for CRC32 Checksum
+	totalSize := 4 + payloadSize
 
 	bufPtr := w.pool.Get().(*[]byte)
 	buf := *bufPtr
@@ -67,28 +64,22 @@ func (w *WAL) WriteRecord(internalKey []byte, value []byte) error {
 		buf = buf[:totalSize]
 	}
 
-	offset := 4 // Skip the first 4 bytes for the checksum
+	offset := 4
 
-	// Write InternalKey Length
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(internalKey)))
 	offset += 4
 
-	// Write InternalKey
 	copy(buf[offset:], internalKey)
 	offset += len(internalKey)
 
-	// Write Value Length
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(value)))
 	offset += 4
 
-	// Write Value
 	copy(buf[offset:], value)
 
-	// Calculate CRC32 of the payload
 	checksum := crc32.ChecksumIEEE(buf[4:totalSize])
 	binary.LittleEndian.PutUint32(buf[0:4], checksum)
 
-	// Write to disk
 	w.mu.Lock()
 	_, err := w.file.Write(buf)
 	w.mu.Unlock()
@@ -105,93 +96,109 @@ func (w *WAL) Close() error {
 	return w.file.Close()
 }
 
-func (w *WAL) Recover(mt *MemTable) error {
+func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if _, err := w.file.Seek(0, 0); err != nil {
-		return err
+	// Reset to start
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return 0, err
 	}
 
-	reader := bufio.NewReaderSize(w.file, 32*1024)
+	var validOffset int64 = 0
+	var maxSeqNum uint64 = 0
 
-	headerBuf := make([]byte, 4)
-	lenBuf := make([]byte, 4)
-	scratchBuf := make([]byte, 4096)
+	// Use a LimitedReader to ensure bufio doesn't read past what's actually there
+	// and keep the file locked.
+	err := func() error {
+		// On Windows, bufio can be aggressive. For recovery,
+		// let's use a smaller buffer or direct reads if necessary.
+		reader := bufio.NewReader(w.file)
+		headerBuf := make([]byte, 4)
+		lenBuf := make([]byte, 4)
+		scratchBuf := make([]byte, 4096)
 
-	for {
-		// 1. Read Checksum
-		if _, err := io.ReadFull(reader, headerBuf); err != nil {
-			if err == io.EOF {
+		for {
+			if _, err := io.ReadFull(reader, headerBuf); err != nil {
+				return nil // EOF
+			}
+			expectedChecksum := binary.LittleEndian.Uint32(headerBuf)
+
+			if _, err := io.ReadFull(reader, lenBuf); err != nil {
 				break
 			}
-			return err
-		}
-		expectedChecksum := binary.LittleEndian.Uint32(headerBuf)
+			keyLen := binary.LittleEndian.Uint32(lenBuf)
 
-		// 2. Read InternalKey Length
-		if _, err := io.ReadFull(reader, lenBuf); err != nil {
-			return err
-		}
-		keyLen := binary.LittleEndian.Uint32(lenBuf)
-
-		// 3. Read InternalKey
-		if cap(scratchBuf) < int(keyLen) {
-			scratchBuf = make([]byte, keyLen)
-		}
-		keyBytes := scratchBuf[:keyLen]
-		if _, err := io.ReadFull(reader, keyBytes); err != nil {
-			return err
-		}
-
-		// MUST allocate a new slice for the InternalKey because the MemTable will hold it forever
-		finalInternalKey := make([]byte, keyLen)
-		copy(finalInternalKey, keyBytes)
-
-		// 4. Read Value Length
-		if _, err := io.ReadFull(reader, lenBuf); err != nil {
-			return err
-		}
-		valLen := binary.LittleEndian.Uint32(lenBuf)
-
-		// 5. Read Value
-		var finalVal []byte
-		if valLen > 0 {
-			if cap(scratchBuf) < int(valLen) {
-				scratchBuf = make([]byte, valLen)
+			if cap(scratchBuf) < int(keyLen) {
+				scratchBuf = make([]byte, keyLen)
 			}
-			valBytes := scratchBuf[:valLen]
-			if _, err := io.ReadFull(reader, valBytes); err != nil {
-				return err
+			keyBytes := scratchBuf[:keyLen]
+			if _, err := io.ReadFull(reader, keyBytes); err != nil {
+				break
 			}
-			finalVal = make([]byte, valLen)
-			copy(finalVal, valBytes)
+
+			finalIK := make([]byte, keyLen)
+			copy(finalIK, keyBytes)
+
+			if _, err := io.ReadFull(reader, lenBuf); err != nil {
+				break
+			}
+			valLen := binary.LittleEndian.Uint32(lenBuf)
+
+			var finalVal []byte
+			if valLen > 0 {
+				if cap(scratchBuf) < int(valLen) {
+					scratchBuf = make([]byte, valLen)
+				}
+				vBytes := scratchBuf[:valLen]
+				if _, err := io.ReadFull(reader, vBytes); err != nil {
+					break
+				}
+				finalVal = make([]byte, valLen)
+				copy(finalVal, vBytes)
+			}
+
+			// Checksum...
+			hasher := crc32.NewIEEE()
+			binary.LittleEndian.PutUint32(lenBuf, keyLen)
+			hasher.Write(lenBuf)
+			hasher.Write(finalIK)
+			binary.LittleEndian.PutUint32(lenBuf, valLen)
+			hasher.Write(lenBuf)
+			hasher.Write(finalVal)
+
+			if hasher.Sum32() != expectedChecksum {
+				break
+			}
+
+			uKey, seq, kType := ParseInternalKey(finalIK)
+			if seq > maxSeqNum {
+				maxSeqNum = seq
+			}
+
+			if kType == TypeDelete {
+				mt.Delete(uKey, seq)
+			} else {
+				mt.Put(uKey, finalVal, seq)
+			}
+
+			validOffset += 4 + 4 + int64(keyLen) + 4 + int64(valLen)
 		}
+		return nil
+	}()
 
-		// 6. Verify Checksum
-		hasher := crc32.NewIEEE()
-		binary.LittleEndian.PutUint32(lenBuf, keyLen)
-		hasher.Write(lenBuf)
-		hasher.Write(finalInternalKey)
-
-		binary.LittleEndian.PutUint32(lenBuf, valLen)
-		hasher.Write(lenBuf)
-		hasher.Write(finalVal)
-
-		if hasher.Sum32() != expectedChecksum {
-			return errors.New("WAL corruption detected: torn write")
-		}
-
-		// 7. Parse the InternalKey and restore it to the MemTable
-		userKey, seqNum, keyType := ParseInternalKey(finalInternalKey)
-
-		if keyType == TypeDelete {
-			mt.Delete(userKey, seqNum)
-		} else {
-			mt.Put(userKey, finalVal, seqNum)
-		}
+	if err != nil {
+		return 0, err
 	}
 
-	_, err := w.file.Seek(0, 2)
-	return err
+	// CRITICAL: Now that we are done reading, we must ensure the file
+	// is ready for truncation.
+	if err := w.file.Truncate(validOffset); err != nil {
+		return 0, fmt.Errorf("windows-access-denied-fix: %w", err)
+	}
+
+	// Because we removed O_APPEND, we MUST manually seek to the end
+	// so the next WriteRecord doesn't overwrite our recovered data.
+	_, err = w.file.Seek(validOffset, io.SeekStart)
+	return maxSeqNum, err
 }

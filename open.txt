@@ -1,0 +1,6 @@
+client : go run cmd/client/main.go
+server : go run cmd/server/main.go   
+
+Integration Test : go test -v ./internal/engine
+Time Test: go test -v ./internal/engine -run TestTitanKV_TimeTravel
+Compaction Test : go test -v ./internal/engine -run TestTitanKV_CompactionPurge

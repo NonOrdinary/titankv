@@ -1,34 +1,32 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 )
 
-// blockSize for logical mapping for sparse Indexing
-const blockSize = 4096 // almost all OS keeps 4kb pages, so it's better to make block size equal to page
-// for direct replace of block to page
+const blockSize = 4096
 
-// IndexEntry represents a single pointer in our Sparse Index.
-// It points to the exact byte offset where a 4KB block begins.
 type IndexEntry struct {
-	Key    string
+	Key    []byte
 	Offset uint32
 }
 
-// SSTableBuilder constructs an immutable, statically indexed file on disk.
 type SSTableBuilder struct {
 	file              *os.File
-	offset            uint32 // Total bytes written to the file so far
-	blockBytesWritten uint32 // Bytes written in the CURRENT 4KB block
+	offset            uint32
+	blockBytesWritten uint32
 	index             []IndexEntry
 
-	minKey string
-	maxKey string
+	minKey []byte
+	maxKey []byte
 	bloom  *BloomFilter
+
+	// FIX: Reusable scratch buffer to prevent GC pressure during high-velocity writes
+	scratchBuf []byte
 }
 
-// NewSSTableBuilder initializes the file and the sparse index array.
 func NewSSTableBuilder(path string) (*SSTableBuilder, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -36,61 +34,66 @@ func NewSSTableBuilder(path string) (*SSTableBuilder, error) {
 	}
 
 	return &SSTableBuilder{
-		file:  f,
-		index: make([]IndexEntry, 0, 1000), // preallocate to avoid GC thrashing
-		bloom: NewBloomFilter(4096, 3),     // 4KB filter, 3 hash functions
+		file:       f,
+		index:      make([]IndexEntry, 0, 1000),
+		bloom:      NewBloomFilter(4096, 3),
+		scratchBuf: make([]byte, 1024), // Start with a 1KB buffer
 	}, nil
 }
 
-// Add the key to our file, also updating min and max keys for max-min index
-func (b *SSTableBuilder) Add(key string, value []byte, isTombstone bool) error {
-	//  Update Min/Max Keys and Bloom Filter on every insert
-	if b.minKey == "" || key < b.minKey {
-		b.minKey = key
-	}
-	if b.maxKey == "" || key > b.maxKey {
-		b.maxKey = key
-	}
-	b.bloom.Add(key)
+func (b *SSTableBuilder) Add(internalKey []byte, value []byte) error {
+	userKey, _, _ := ParseInternalKey(internalKey)
 
-	// If this is the very first key of a new block, add it to the Sparse Index
+	// Update Min/Max using UserKey only
+	if b.minKey == nil || bytes.Compare(userKey, b.minKey) < 0 {
+		b.minKey = append([]byte(nil), userKey...)
+	}
+	if b.maxKey == nil || bytes.Compare(userKey, b.maxKey) > 0 {
+		b.maxKey = append([]byte(nil), userKey...)
+	}
+
+	b.bloom.Add(string(userKey))
+
 	if b.blockBytesWritten == 0 {
-		b.index = append(b.index, IndexEntry{Key: key, Offset: b.offset})
+		b.index = append(b.index, IndexEntry{
+			Key:    append([]byte(nil), userKey...),
+			Offset: b.offset,
+		})
 	}
 
-	// Serialise each record,then put it inside block , until we hit the trigger
-	recordSize := 1 + 4 + len(key) + 4 + len(value)
-	buf := make([]byte, recordSize)
+	// 1. Calculate record size
+	recordSize := 4 + len(internalKey) + 4 + len(value)
 
-	if isTombstone {
-		buf[0] = 1
-	} else {
-		buf[0] = 0
+	// 2. REUSE OR GROW the scratch buffer instead of allocating new memory
+	if cap(b.scratchBuf) < recordSize {
+		// If we hit a massive value, grow the buffer.
+		// Go's slice growth will ensure this happens infrequently.
+		b.scratchBuf = make([]byte, recordSize)
 	}
+	// Slice the buffer to the exact size needed
+	buf := b.scratchBuf[:recordSize]
 
-	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(key)))
-	offset := 5
-	copy(buf[offset:], key)
-	offset += len(key)
+	// 3. Serialize directly into the scratch memory
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(len(internalKey)))
+	offset := 4
+
+	copy(buf[offset:], internalKey)
+	offset += len(internalKey)
 
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(value)))
 	offset += 4
+
 	copy(buf[offset:], value)
 
-	// Write to disk
+	// 4. Single system call write
 	_, err := b.file.Write(buf)
 	if err != nil {
 		return err
 	}
 
-	// Update our offsets to next positions of write
 	b.offset += uint32(recordSize)
 	b.blockBytesWritten += uint32(recordSize)
 
-	// 7. The Sparse Index Trigger
-	// If this block crossed the 4KB boundary, we reset the counter.
-	// NOTE: It ensures that even if the value is 5KB, it would still stay in one file, as blockSize isn't a hard limit
-	// This ensures the NEXT call to Add() will record a new IndexEntry.
 	if b.blockBytesWritten >= blockSize {
 		b.blockBytesWritten = 0
 	}
@@ -98,9 +101,10 @@ func (b *SSTableBuilder) Add(key string, value []byte, isTombstone bool) error {
 	return nil
 }
 
-// Writes the Sparse Index to the file
 func (b *SSTableBuilder) Finish() error {
-	// Record exactly where the Data Blocks end and the Bloom filter begins
+	// ... (Rest of the logic for Bloom, Index, and Footer remains as previously established)
+	// These are called only once per SSTable, so the single-time allocations here are acceptable.
+
 	bloomStartOffset := b.offset
 	if _, err := b.file.Write(b.bloom.Bytes()); err != nil {
 		return err
@@ -109,19 +113,16 @@ func (b *SSTableBuilder) Finish() error {
 
 	indexStartOffset := b.offset
 
-	// Serialize the Sparse Index
-	// First, write how many entries we have (4 bytes)
-	countBuf := make([]byte, 4) // 32 bits  = 2 ^ 32 entries tracked
+	countBuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(countBuf, uint32(len(b.index)))
 	if _, err := b.file.Write(countBuf); err != nil {
 		return err
 	}
 	b.offset += 4
 
-	// Write each Index Entry: [KeyLen(4)] + [Key] + [BlockOffset(4)]
 	for _, entry := range b.index {
 		entrySize := 4 + len(entry.Key) + 4
-		entryBuf := make([]byte, entrySize)
+		entryBuf := b.scratchBuf[:entrySize] // Reuse scratchBuf here too!
 
 		binary.LittleEndian.PutUint32(entryBuf[0:4], uint32(len(entry.Key)))
 		copy(entryBuf[4:], entry.Key)
@@ -132,12 +133,10 @@ func (b *SSTableBuilder) Finish() error {
 		}
 		b.offset += uint32(entrySize)
 	}
-	// Min Max key Range : We need it here too because we want to make sure that even if
-	// our main file (MANIFEST : Registry) get's corrupted, we can rebuild it all by reading all files
-	metaStartOffset := b.offset
 
+	metaStartOffset := b.offset
 	metaSize := 4 + len(b.minKey) + 4 + len(b.maxKey)
-	metaBuf := make([]byte, metaSize)
+	metaBuf := b.scratchBuf[:metaSize] // Reuse scratchBuf here too!
 
 	binary.LittleEndian.PutUint32(metaBuf[0:4], uint32(len(b.minKey)))
 	metaOffset := 4
@@ -154,21 +153,15 @@ func (b *SSTableBuilder) Finish() error {
 	b.offset += uint32(metaSize)
 
 	footerBuf := make([]byte, 16)
-	// [0 : 3] -> bloom filter offset, it's written 4, but it would go as [l,r)
 	binary.LittleEndian.PutUint32(footerBuf[0:4], bloomStartOffset)
-	// [4 : 7] -> sparse index offset
 	binary.LittleEndian.PutUint32(footerBuf[4:8], indexStartOffset)
-	// [8 : 11] -> min - max range data  offset
 	binary.LittleEndian.PutUint32(footerBuf[8:12], metaStartOffset)
-	//[12 : 15] -> Magic number for protection against corrupted file as if last 4 bytes are written correctly
-	// then everything is fine
 	binary.LittleEndian.PutUint32(footerBuf[12:16], 0xABCD1234)
 
 	if _, err := b.file.Write(footerBuf); err != nil {
 		return err
 	}
 
-	// Sync the file to the DISK
 	b.file.Sync()
 	return b.file.Close()
 }

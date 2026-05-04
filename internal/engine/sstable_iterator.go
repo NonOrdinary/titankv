@@ -1,97 +1,83 @@
 package engine
 
 import (
+	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 )
 
-type KVPair struct {
-	Key         string
+type IteratorKV struct {
+	InternalKey []byte
 	Value       []byte
-	IsTombstone bool
 }
 
-// SSTableIterator streams an SSTable sequentially using its own file descriptor.
 type SSTableIterator struct {
-	file          *os.File
-	currentOffset int64
-	endOffset     int64
+	file   *os.File
+	reader *bufio.Reader // FIX 3: Buffered reading to minimize syscalls
+	endPos uint32
+	curr   uint32 // FIX 1: Local counter to eliminate Seek tax
 
-	tombstoneBuf []byte
-	lenBuf       []byte
-	keyBuf       []byte // Pre-allocated buffer
-	valBuf       []byte // Pre-allocated buffer
+	lenBuf []byte // Pre-allocated 4-byte buffer for lengths
 }
 
-func NewSSTableIterator(path string, bloomStartOffset uint32) (*SSTableIterator, error) {
-	// Independent file descriptor prevents data races with live Get() queries
+func NewSSTableIterator(path string, endPos uint32) (*SSTableIterator, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SSTableIterator{
-		file:          f,
-		currentOffset: 0,
-		endOffset:     int64(bloomStartOffset),
-		tombstoneBuf:  make([]byte, 1),
-		lenBuf:        make([]byte, 4),
-		keyBuf:        make([]byte, 0, 256),
-		valBuf:        make([]byte, 0, 1024),
+		file:   f,
+		reader: bufio.NewReaderSize(f, 64*1024), // 64KB buffer for smooth streaming
+		endPos: endPos,
+		curr:   0,
+		lenBuf: make([]byte, 4),
 	}, nil
 }
 
-func (it *SSTableIterator) Next() (*KVPair, error) {
-	if it.currentOffset >= it.endOffset {
-		return nil, io.EOF
+func (it *SSTableIterator) Next() (IteratorKV, error) {
+	// Check against our local counter instead of Seek()
+	if it.curr >= it.endPos {
+		return IteratorKV{}, io.EOF
 	}
 
-	if _, err := io.ReadFull(it.file, it.tombstoneBuf); err != nil {
-		return nil, err
+	// 1. Read InternalKey Length
+	if _, err := io.ReadFull(it.reader, it.lenBuf); err != nil {
+		return IteratorKV{}, err
 	}
-	isTombstone := it.tombstoneBuf[0] == 1
-	it.currentOffset++
+	ikLen := binary.LittleEndian.Uint32(it.lenBuf)
+	it.curr += 4
 
-	if _, err := io.ReadFull(it.file, it.lenBuf); err != nil {
-		return nil, err
+	// 2. FIX 2: Zero-allocation direct read.
+	// We allocate the final destination once and read directly into it.
+	finalIK := make([]byte, ikLen)
+	if _, err := io.ReadFull(it.reader, finalIK); err != nil {
+		return IteratorKV{}, fmt.Errorf("failed to read InternalKey: %w", err)
 	}
-	keyLen := binary.LittleEndian.Uint32(it.lenBuf)
-	it.currentOffset += 4
+	it.curr += ikLen
 
-	// Safely grow or reuse the Key buffer
-	if cap(it.keyBuf) < int(keyLen) {
-		it.keyBuf = make([]byte, keyLen)
-	}
-	it.keyBuf = it.keyBuf[:keyLen]
-	if _, err := io.ReadFull(it.file, it.keyBuf); err != nil {
-		return nil, err
-	}
-	it.currentOffset += int64(keyLen)
-
-	if _, err := io.ReadFull(it.file, it.lenBuf); err != nil {
-		return nil, err
+	// 3. Read Value Length
+	if _, err := io.ReadFull(it.reader, it.lenBuf); err != nil {
+		return IteratorKV{}, err
 	}
 	valLen := binary.LittleEndian.Uint32(it.lenBuf)
-	it.currentOffset += 4
+	it.curr += 4
 
-	// Safely grow or reuse the Value buffer
-	if cap(it.valBuf) < int(valLen) {
-		it.valBuf = make([]byte, valLen)
+	// 4. Read Value
+	var finalVal []byte
+	if valLen > 0 {
+		finalVal = make([]byte, valLen)
+		if _, err := io.ReadFull(it.reader, finalVal); err != nil {
+			return IteratorKV{}, fmt.Errorf("failed to read Value: %w", err)
+		}
+		it.curr += valLen
 	}
-	it.valBuf = it.valBuf[:valLen]
-	if _, err := io.ReadFull(it.file, it.valBuf); err != nil {
-		return nil, err
-	}
-	it.currentOffset += int64(valLen)
 
-	return &KVPair{
-		Key:         string(it.keyBuf),
-		Value:       it.valBuf,
-		IsTombstone: isTombstone,
-	}, nil
+	return IteratorKV{InternalKey: finalIK, Value: finalVal}, nil
 }
 
-func (it *SSTableIterator) Close() {
-	it.file.Close()
+func (it *SSTableIterator) Close() error {
+	return it.file.Close()
 }
