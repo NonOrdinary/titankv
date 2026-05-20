@@ -13,4 +13,4 @@ go.work
 
 # IDE / Editor
 .vscode/
-._internal/
+_internal/
