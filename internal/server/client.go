@@ -14,16 +14,13 @@ var (
 	ErrServer = errors.New("internal server error")
 )
 
-// Client provides a thread-safe SDK that perfectly mirrors the engine.DB interface.
 type Client struct {
 	addr string
 	conn net.Conn
 
-	// Enforces atomic network writes to prevent byte-interleaving on concurrent calls.
 	mu sync.Mutex
 }
 
-// NewClient connects to the TitanKV server with a strict timeout.
 func NewClient(addr string) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -36,7 +33,6 @@ func NewClient(addr string) (*Client, error) {
 	}, nil
 }
 
-// Close gracefully terminates the TCP connection.
 func (c *Client) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()
@@ -44,7 +40,6 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// Get perfectly mirrors db.Get(key string) ([]byte, bool, error)
 func (c *Client) Get(key string) ([]byte, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -60,7 +55,7 @@ func (c *Client) Get(key string) ([]byte, bool, error) {
 	}
 
 	if status == StatusNotFound {
-		return nil, false, nil // Successfully queried, but key doesn't exist
+		return nil, false, nil
 	}
 	if status == StatusError {
 		return nil, false, fmt.Errorf("%w: %s", ErrServer, string(value))
@@ -69,7 +64,6 @@ func (c *Client) Get(key string) ([]byte, bool, error) {
 	return value, true, nil
 }
 
-// Put mirrors db.Put(key string, value []byte) error
 func (c *Client) Put(key string, value []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -91,7 +85,6 @@ func (c *Client) Put(key string, value []byte) error {
 	return nil
 }
 
-// Delete mirrors db.Delete(key string) error
 func (c *Client) Delete(key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -113,7 +106,6 @@ func (c *Client) Delete(key string) error {
 	return nil
 }
 
-// readResponse decodes the server's reply.
 func (c *Client) readResponse() (uint8, []byte, error) {
 	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer c.conn.SetReadDeadline(time.Time{})

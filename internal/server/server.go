@@ -10,33 +10,27 @@ import (
 	"time"
 )
 
-// KVStore defines the exact contract required from the storage engine.
-// This perfectly mirrors the public methods of your DB struct in db.go.
 type KVStore interface {
 	Get(key string) ([]byte, bool, error)
 	Put(key string, value []byte) error
 	Delete(key string) error
 }
 
-// Response Status Codes
 const (
 	StatusOk       uint8 = 0x00
 	StatusNotFound uint8 = 0x01
 	StatusError    uint8 = 0x02
 )
 
-// Server represents our high-performance TCP multiplexer.
 type Server struct {
 	addr     string
 	store    KVStore
 	listener net.Listener
 
-	// Concurrency controls for graceful shutdown
 	quit chan struct{}
 	wg   sync.WaitGroup
 }
 
-// NewServer initializes the network server with the provided storage engine.
 func NewServer(addr string, store KVStore) *Server {
 	return &Server{
 		addr:  addr,
@@ -45,7 +39,6 @@ func NewServer(addr string, store KVStore) *Server {
 	}
 }
 
-// Start binds to the TCP port and begins accepting connections.
 func (s *Server) Start() error {
 	var err error
 	s.listener, err = net.Listen("tcp", s.addr)
@@ -55,18 +48,16 @@ func (s *Server) Start() error {
 
 	log.Printf("TitanKV TCP Server listening on %s", s.addr)
 
-	// Accept loop runs in its own goroutine so Start() doesn't block
 	go s.acceptLoop()
 
 	return nil
 }
 
-// Stop initiates a graceful shutdown.
 func (s *Server) Stop() {
 	log.Println("Initiating graceful network shutdown...")
-	close(s.quit)      // Signal the accept loop to stop
-	s.listener.Close() // Break the blocking Accept() call
-	s.wg.Wait()        // Wait for all active client goroutines to finish
+	close(s.quit)
+	s.listener.Close()
+	s.wg.Wait()
 	log.Println("Network server successfully stopped.")
 }
 
@@ -76,7 +67,7 @@ func (s *Server) acceptLoop() {
 		if err != nil {
 			select {
 			case <-s.quit:
-				return // Graceful shutdown requested
+				return
 			default:
 				log.Printf("Failed to accept connection: %v", err)
 				continue
@@ -95,13 +86,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 	remoteAddr := conn.RemoteAddr().String()
 
 	for {
-		// Prevent dead clients from holding connections open forever
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 
 		req, err := DecodeRequest(conn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return // Client disconnected cleanly
+				return
 			}
 			log.Printf("Connection error with %s: %v", remoteAddr, err)
 			return
@@ -112,10 +102,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Server) dispatch(conn net.Conn, req *Request) {
-	// Set a deadline for the server to reply
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
-	// Cast the byte slice to a string to match the db.go API
 	keyStr := string(req.Key)
 
 	switch req.Op {
@@ -150,7 +138,6 @@ func (s *Server) dispatch(conn net.Conn, req *Request) {
 	}
 }
 
-// writeResponse serializes the server's reply back to the client.
 func writeResponse(w io.Writer, status uint8, value []byte) error {
 	payloadLen := 1 + len(value)
 
