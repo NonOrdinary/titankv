@@ -4,14 +4,11 @@ import (
 	"hash/fnv"
 )
 
-// BloomFilter is a probabilistic data structure that tells us if a key is
-// definitely NOT in a set, or POSSIBLY in a set.
 type BloomFilter struct {
 	bitset    []byte
 	numHashes int
 }
 
-// NewBloomFilter creates a fresh, empty Bloom Filter for writing.
 func NewBloomFilter(sizeInBytes int, numHashes int) *BloomFilter {
 	return &BloomFilter{
 		bitset:    make([]byte, sizeInBytes),
@@ -19,7 +16,6 @@ func NewBloomFilter(sizeInBytes int, numHashes int) *BloomFilter {
 	}
 }
 
-// LoadBloomFilter wraps an existing byte slice (read from disk) for querying.
 func LoadBloomFilter(data []byte, numHashes int) *BloomFilter {
 	return &BloomFilter{
 		bitset:    data,
@@ -42,11 +38,9 @@ func (bf *BloomFilter) Add(key string) {
 	}
 }
 
-// MightContain checks if a key might be in the set.
-// If it returns false, the key is 100% NOT in the set.
 func (bf *BloomFilter) MightContain(key string) bool {
 	if len(bf.bitset) == 0 {
-		return true // If there's no filter, assume it might be there to be safe
+		return true
 	}
 
 	h := fnv.New32a()
@@ -66,7 +60,6 @@ func (bf *BloomFilter) MightContain(key string) bool {
 	return true
 }
 
-// Bytes returns the underlying bitset for serialization to disk.
 func (bf *BloomFilter) Bytes() []byte {
 	return bf.bitset
 }

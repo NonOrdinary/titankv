@@ -38,7 +38,6 @@ func (db *DB) Compact() error {
 		db.mu.Unlock()
 	}()
 
-	// Define 24-hour history watermark
 	watermark := uint64(time.Now().Add(-24 * time.Hour).UnixNano())
 
 	db.mu.RLock()
@@ -78,7 +77,7 @@ func (db *DB) Compact() error {
 		userKey, seqNum, keyType := ParseInternalKey(top.InternalKey)
 
 		keepVersion := true
-		// Tombstone Resurrection: If baseline is a DELETE, drop it to reclaim space.
+
 		if seqNum <= watermark && keyType == TypeDelete {
 			keepVersion = false
 		}
@@ -86,8 +85,6 @@ func (db *DB) Compact() error {
 		if keepVersion {
 			builder.Add(top.InternalKey, top.Value)
 		}
-
-		// Non-Greedy Advance: Discard "Orphans" from the winning iterator immediately
 		for {
 			nextKV, err := iterators[top.IterIdx].Next()
 			if err != nil {
@@ -100,7 +97,6 @@ func (db *DB) Compact() error {
 				break
 			}
 
-			// If we already hit the watermark for this key, discard all older versions in this file
 			if seqNum <= watermark {
 				continue
 			}
@@ -121,8 +117,6 @@ func (db *DB) Compact() error {
 		db.manifest.Append(ManifestRecord{Action: "REMOVE", Path: oldTable.Path})
 	}
 	db.mu.Unlock()
-
-	// Rug Pull Protection (Delayed GC)
 	go func(tables []*SSTableReader) {
 		time.Sleep(10 * time.Second)
 		for _, oldTable := range tables {

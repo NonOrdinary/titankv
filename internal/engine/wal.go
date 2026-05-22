@@ -1,18 +1,3 @@
-/*
-*
-* WAL : Write Ahead Log File
-Please Note : write now we are directly touching the disk, we would optimise it later
-* -Ensures Durability(D) of ACID
-* -Can withstand any kind of failure, system or server
-* -Success of a transaction to user will only be shown when the wal has been flushed to DISK(permanent) -fsync() syscall
-* -This is an append only file, thus enabling almost sequential writes (we cannot actually ensure that it would be sequential)
-* -There is a file descriptor at end, new data is added to offsets, which are visible immediately(this is what sequential means here)
-* -On failure, complete file isn't read, rather only upto last checkpoint, as on reaching checkpoint, the file is synced to
-* disk, basically on failure, start from the previos checkpoint
-* -Checksum : To ensure correct writing of data and no data loss (either by error or by power outage during write)using the checksum
-* sync pool : very essential, otherwise the Go garbage collector would bottleneck while clearing the space allocated to
-* serialised data of key,so sync pool are auto released and actually overwritten once given back to pool buffer.
-*/
 package engine
 
 import (
@@ -25,7 +10,6 @@ import (
 	"sync"
 )
 
-// WAL represents the Write-Ahead Log.
 type WAL struct {
 	file *os.File
 	mu   sync.Mutex
@@ -33,7 +17,6 @@ type WAL struct {
 }
 
 func NewWAL(path string) (*WAL, error) {
-	// FIX 1: Must be O_RDWR so we can actually read it during recovery
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -100,7 +83,6 @@ func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Reset to start
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return 0, err
 	}
@@ -108,11 +90,7 @@ func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 	var validOffset int64 = 0
 	var maxSeqNum uint64 = 0
 
-	// Use a LimitedReader to ensure bufio doesn't read past what's actually there
-	// and keep the file locked.
 	err := func() error {
-		// On Windows, bufio can be aggressive. For recovery,
-		// let's use a smaller buffer or direct reads if necessary.
 		reader := bufio.NewReader(w.file)
 		headerBuf := make([]byte, 4)
 		lenBuf := make([]byte, 4)
@@ -120,7 +98,7 @@ func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 
 		for {
 			if _, err := io.ReadFull(reader, headerBuf); err != nil {
-				return nil // EOF
+				return nil
 			}
 			expectedChecksum := binary.LittleEndian.Uint32(headerBuf)
 
@@ -158,7 +136,6 @@ func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 				copy(finalVal, vBytes)
 			}
 
-			// Checksum...
 			hasher := crc32.NewIEEE()
 			binary.LittleEndian.PutUint32(lenBuf, keyLen)
 			hasher.Write(lenBuf)
@@ -191,14 +168,10 @@ func (w *WAL) Recover(mt *MemTable) (uint64, error) {
 		return 0, err
 	}
 
-	// CRITICAL: Now that we are done reading, we must ensure the file
-	// is ready for truncation.
 	if err := w.file.Truncate(validOffset); err != nil {
 		return 0, fmt.Errorf("windows-access-denied-fix: %w", err)
 	}
 
-	// Because we removed O_APPEND, we MUST manually seek to the end
-	// so the next WriteRecord doesn't overwrite our recovered data.
 	_, err = w.file.Seek(validOffset, io.SeekStart)
 	return maxSeqNum, err
 }
