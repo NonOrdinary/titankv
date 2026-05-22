@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// State represents the three possible roles a Raft node can occupy.
 type State int
 
 const (
@@ -16,40 +15,30 @@ const (
 	Leader
 )
 
-// Node represents a single server participating in the Raft consensus cluster.
 type Node struct {
 	mu sync.RWMutex
 
-	// --- Core Identification ---
-	id    string   // This node's unique ID (e.g., "node_1")
-	peers []string // Network addresses of all other nodes in the cluster
+	id    string
+	peers []string
 
-	// --- Persistent State on all servers ---
-	// (Must be saved to disk before responding to RPCs, though kept in RAM for now)
 	currentTerm uint64
-	votedFor    string // ID of the candidate that received vote in current term (or "" if none)
-	log         *Log   // The replicated state machine log we just built
+	votedFor    string
+	log         *Log
 
-	// --- Volatile State on all servers ---
-	commitIndex uint64 // Index of highest log entry known to be committed
-	lastApplied uint64 // Index of highest log entry applied to the local TitanKV engine
+	commitIndex uint64
+	lastApplied uint64
 	state       State
 
-	// --- Volatile State on Leaders (Reinitialized after election) ---
-	// nextIndex tracks what log entry to send to each Follower next.
 	nextIndex map[string]uint64
-	// matchIndex tracks the highest log entry known to be replicated on each Follower.
+
 	matchIndex map[string]uint64
 
-	// --- Concurrency & Timing ---
-	// Randomized election timeout prevents split-brain (all nodes waking up to vote at once)
 	electionResetEvent time.Time
 
 	quit chan struct{}
 	wg   sync.WaitGroup
 }
 
-// NewNode initializes a Raft node in the default Follower state.
 func NewNode(id string, peers []string, raftLog *Log) *Node {
 	return &Node{
 		id:          id,
@@ -66,7 +55,6 @@ func NewNode(id string, peers []string, raftLog *Log) *Node {
 	}
 }
 
-// Start boots the Raft consensus engine and begins the randomized election timer.
 func (n *Node) Start() {
 	n.mu.Lock()
 	n.electionResetEvent = time.Now()
@@ -78,19 +66,15 @@ func (n *Node) Start() {
 	log.Printf("Raft Node [%s] started as FOLLOWER.", n.id)
 }
 
-// Stop safely shuts down the Raft background threads.
 func (n *Node) Stop() {
 	close(n.quit)
 	n.wg.Wait()
 	log.Printf("Raft Node [%s] shut down.", n.id)
 }
 
-// runElectionTimer continuously checks if the Leader has died.
-// If the timer expires without a heartbeat, the Follower triggers an election.
 func (n *Node) runElectionTimer() {
 	defer n.wg.Done()
 
-	// Raft paper recommends election timeouts between 150ms and 300ms
 	timeoutDuration := n.randomElectionTimeout()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -105,12 +89,9 @@ func (n *Node) runElectionTimer() {
 			lastEvent := n.electionResetEvent
 			n.mu.RUnlock()
 
-			// Leaders do not run election timers
 			if state != Leader {
-				// If the time since the last heartbeat is greater than our random timeout, panic!
 				if time.Since(lastEvent) >= timeoutDuration {
 					n.startElection()
-					// Reset the timeout duration for the next cycle
 					timeoutDuration = n.randomElectionTimeout()
 				}
 			}
@@ -118,12 +99,11 @@ func (n *Node) runElectionTimer() {
 	}
 }
 
-// startElection transitions the node to Candidate and requests votes.
 func (n *Node) startElection() {
 	n.mu.Lock()
 	n.state = Candidate
 	n.currentTerm++
-	n.votedFor = n.id // Vote for self
+	n.votedFor = n.id
 	n.electionResetEvent = time.Now()
 
 	savedTerm := n.currentTerm
@@ -134,9 +114,7 @@ func (n *Node) startElection() {
 
 }
 
-// randomElectionTimeout generates a jittered timeout between 150ms and 300ms.
 func (n *Node) randomElectionTimeout() time.Duration {
-	// Formula: 150 + rand(150)
 	ms := 150 + rand.Intn(150)
 	return time.Duration(ms) * time.Millisecond
 }

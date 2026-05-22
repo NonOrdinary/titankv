@@ -13,14 +13,12 @@ import (
 	"github.com/NonOrdinary/titankv/internal/server"
 )
 
-// Router acts as a Layer 7 TCP Proxy with an integrated Connection Pool.
 type Router struct {
 	addr string
 	ring *HashRing
-	pool sync.Map // map[string]chan net.Conn
+	pool sync.Map
 }
 
-// NewRouter initializes the gateway.
 func NewRouter(addr string, ring *HashRing) *Router {
 	return &Router{
 		addr: addr,
@@ -28,7 +26,6 @@ func NewRouter(addr string, ring *HashRing) *Router {
 	}
 }
 
-// Start binds the router to a public-facing port.
 func (r *Router) Start() error {
 	listener, err := net.Listen("tcp", r.addr)
 	if err != nil {
@@ -76,19 +73,14 @@ func (r *Router) handleClient(clientConn net.Conn) {
 	}
 }
 
-// --- CONNECTION POOL LOGIC ---
-
 func (r *Router) getConn(targetAddr string) (net.Conn, error) {
-	// 1. Get or create a channel that holds up to 100 idle connections per shard
 	poolInt, _ := r.pool.LoadOrStore(targetAddr, make(chan net.Conn, 100))
 	pool := poolInt.(chan net.Conn)
 
 	select {
 	case conn := <-pool:
-		// 2. We found a reusable connection!
 		return conn, nil
 	default:
-		// 3. Pool is empty, open a new one
 		return net.DialTimeout("tcp", targetAddr, 2*time.Second)
 	}
 }
@@ -103,22 +95,17 @@ func (r *Router) releaseConn(targetAddr string, conn net.Conn) {
 
 	select {
 	case pool <- conn:
-		// 4. Put the connection back in the pool for the next request
 	default:
-		// 5. Pool is full, safe to drop and close
 		conn.Close()
 	}
 }
 
-// forwardRequest proxies data using the reusable connection pool.
 func (r *Router) forwardRequest(clientConn net.Conn, targetAddr string, req *server.Request) error {
-	// Get a pooled connection instead of dialing a fresh one
 	targetConn, err := r.getConn(targetAddr)
 	if err != nil {
 		return fmt.Errorf("shard %s unreachable: %w", targetAddr, err)
 	}
 
-	// Ensure the connection goes back to the pool when this function finishes
 	defer r.releaseConn(targetAddr, targetConn)
 
 	if err := server.EncodeRequest(targetConn, req); err != nil {
