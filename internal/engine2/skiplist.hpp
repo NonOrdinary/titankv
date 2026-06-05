@@ -7,7 +7,7 @@
 #include <functional>
 
 int CompareInternalKeys(const std::string& a, const std::string& b);
-std::tuple<std::string, std::string, uint8_t> ParseInternalKey(const std::string& internalKey);
+std::tuple<std::string, uint64_t, uint8_t> ParseInternalKey(const std::string& internalKey);
 
 const int MAX_LEVEL = 32;
 
