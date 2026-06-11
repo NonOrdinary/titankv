@@ -1,0 +1,3 @@
+C:\msys64\ucrt64\bin\cmake.exe -E rm -f CMakeFiles\titankv_tests.dir/objects.a
+C:\msys64\ucrt64\bin\ar.exe qc CMakeFiles\titankv_tests.dir/objects.a @CMakeFiles\titankv_tests.dir\objects1.rsp
+C:\msys64\ucrt64\bin\g++.exe -g -Wl,--whole-archive CMakeFiles\titankv_tests.dir/objects.a -Wl,--no-whole-archive -o titankv_tests.exe -Wl,--out-implib,libtitankv_tests.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\titankv_tests.dir\linkLibs.rsp

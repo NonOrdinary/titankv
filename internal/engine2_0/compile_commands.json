@@ -1,0 +1,62 @@
+[
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\bloomfilter.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\bloomfilter.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/bloomfilter.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/bloomfilter.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\internal_key.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\internal_key.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/internal_key.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/internal_key.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\wal.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\wal.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/wal.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/wal.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\memtable.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\memtable.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/memtable.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/memtable.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\sstable_builder.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\sstable_builder.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/sstable_builder.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/sstable_builder.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\sstable_reader.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\sstable_reader.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/sstable_reader.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/sstable_reader.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\sstable_iterator.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\sstable_iterator.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/sstable_iterator.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/sstable_iterator.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\manifest.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\manifest.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/manifest.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/manifest.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/titankv_lib.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_lib.dir\\internal\\engine2_0\\db.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\db.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/db.cpp",
+  "output": "CMakeFiles/titankv_lib.dir/internal/engine2_0/db.cpp.obj"
+},
+{
+  "directory": "C:/Users/maury/Desktop/CPP/titankv/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DGTEST_LINKED_AS_SHARED_LIBRARY=1 @CMakeFiles/titankv_tests.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\titankv_tests.dir\\internal\\engine2_0\\test_db.cpp.obj -c C:\\Users\\maury\\Desktop\\CPP\\titankv\\internal\\engine2_0\\test_db.cpp",
+  "file": "C:/Users/maury/Desktop/CPP/titankv/internal/engine2_0/test_db.cpp",
+  "output": "CMakeFiles/titankv_tests.dir/internal/engine2_0/test_db.cpp.obj"
+}
+]

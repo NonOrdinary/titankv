@@ -1,0 +1,5 @@
+if(EXISTS "C:/Users/maury/Desktop/CPP/titankv/build/titankv_tests[1]_tests.cmake")
+  include("C:/Users/maury/Desktop/CPP/titankv/build/titankv_tests[1]_tests.cmake")
+else()
+  add_test(titankv_tests_NOT_BUILT titankv_tests_NOT_BUILT)
+endif()

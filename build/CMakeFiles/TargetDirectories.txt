@@ -1,0 +1,5 @@
+C:/Users/maury/Desktop/CPP/titankv/build/CMakeFiles/titankv_lib.dir
+C:/Users/maury/Desktop/CPP/titankv/build/CMakeFiles/titankv_tests.dir
+C:/Users/maury/Desktop/CPP/titankv/build/CMakeFiles/test.dir
+C:/Users/maury/Desktop/CPP/titankv/build/CMakeFiles/edit_cache.dir
+C:/Users/maury/Desktop/CPP/titankv/build/CMakeFiles/rebuild_cache.dir

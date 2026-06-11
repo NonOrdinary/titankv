@@ -1,0 +1,141 @@
+{
+	"configurations" : 
+	[
+		{
+			"abstractTargets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::GTest::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__GTest-Debug-82aa2ee67c95a48250b4.json",
+					"name" : "GTest::GTest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::Main::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__Main-Debug-0283fd01598e8aa59687.json",
+					"name" : "GTest::Main",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::gmock::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__gmock-Debug-6a08fc0e92e3dbe8239c.json",
+					"name" : "GTest::gmock",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::gmock_main::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__gmock_main-Debug-df159f60b0815dec1f95.json",
+					"name" : "GTest::gmock_main",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::gtest::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__gtest-Debug-b91d5f05eaa9db672d40.json",
+					"name" : "GTest::gtest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "GTest::gtest_main::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-GTest__gtest_main-Debug-80a4d37c8b88c7f50868.json",
+					"name" : "GTest::gtest_main",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "Threads::Threads::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Threads__Threads-Debug-90c6ae74c5c70bc98ed0.json",
+					"name" : "Threads::Threads",
+					"projectIndex" : 0
+				}
+			],
+			"directories" : 
+			[
+				{
+					"abstractTargetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6
+					],
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-f6f22219c74102c3da70.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.15"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"abstractTargetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6
+					],
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "titankv",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "titankv_lib::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-titankv_lib-Debug-07222614d7b0e535e145.json",
+					"name" : "titankv_lib",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "titankv_tests::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-titankv_tests-Debug-3377fe422263fcc6d59d.json",
+					"name" : "titankv_tests",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/maury/Desktop/CPP/titankv/build",
+		"source" : "C:/Users/maury/Desktop/CPP/titankv"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 9
+	}
+}
